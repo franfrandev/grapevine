@@ -1,5 +1,6 @@
 use libp2p::BehaviourBuilderError;
 use libp2p::gossipsub::PublishError;
+use libp2p::identity::DecodingError;
 use std::convert::Infallible;
 use thiserror::Error;
 use tokio::io;
@@ -50,6 +51,8 @@ pub enum AppError {
     BehaviourBuilder(#[from] BehaviourBuilderError),
     #[error("error: {0}")]
     Anyhow(#[from] anyhow::Error),
+    #[error(transparent)]
+    DecodingError(#[from] DecodingError),
 
     #[error("unreachable")] // this is to accommodate long-running services
     Unreachable(#[from] Infallible),

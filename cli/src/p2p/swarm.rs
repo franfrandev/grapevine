@@ -4,6 +4,10 @@ use crate::{
     p2p::codec::Message,
     utils::{Ctx, Service, TaskRet},
 };
+use libp2p::core::muxing::StreamMuxerBox;
+use libp2p::identity::Keypair;
+use libp2p::multiaddr::Protocol;
+use libp2p::{Multiaddr, Transport};
 use libp2p::{
     PeerId, Swarm, SwarmBuilder,
     futures::StreamExt,
@@ -14,6 +18,8 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
 };
 use std::convert::Infallible;
+use std::fs;
+use std::net::Ipv4Addr;
 use thiserror::Error;
 use tokio::{
     io,
@@ -141,9 +147,24 @@ impl ListenerSwarmService {
 }
 
 fn init_swarm(topic: &IdentTopic) -> Result<Swarm<RadioBehavior>, AppError> {
-    let mut swarm = SwarmBuilder::with_new_identity()
+    let swarm_builder = if let Ok(mut bytes) = fs::read("secp256k1.der") {
+        let keypair = Keypair::secp256k1_from_der(&mut bytes)?;
+        SwarmBuilder::with_existing_identity(keypair)
+    } else {
+        SwarmBuilder::with_new_identity()
+    };
+
+    let mut swarm = swarm_builder
         .with_tokio()
         .with_quic()
+        .with_other_transport(|id_keys| {
+            Ok(libp2p_webrtc::tokio::Transport::new(
+                id_keys.clone(),
+                libp2p_webrtc::tokio::Certificate::generate(&mut rand::rng())?,
+            )
+            .map(|(peer_id, conn), _| (peer_id, StreamMuxerBox::new(conn))))
+        })
+        .unwrap() // TODO
         .with_bandwidth_metrics(&mut global_registry().lock().unwrap())
         .with_behaviour(|key| {
             let local_public_key = key.public();
@@ -180,6 +201,12 @@ fn init_swarm(topic: &IdentTopic) -> Result<Swarm<RadioBehavior>, AppError> {
             })
         })?
         .build();
+
+    let address_webrtc = Multiaddr::from(Ipv4Addr::UNSPECIFIED)
+        .with(Protocol::Udp(0))
+        .with(Protocol::WebRTCDirect);
+
+    swarm.listen_on(address_webrtc.clone()).unwrap();
 
     let listener_id = swarm
         .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap())
@@ -223,6 +250,8 @@ async fn process_streamer_event(
     tracing::trace!("Swarm Event: {:?}", event);
     match event {
         SwarmEvent::Behaviour(b_event) => process_streamer_behavior_event(swarm, b_event).await,
+        SwarmEvent::IncomingConnection { .. } => {}
+        SwarmEvent::NewListenAddr { address, .. } => tracing::info!("Listening on {:?}", address),
         _other => {
             tracing::debug!("Swarm Event not handled: {:?}", _other)
         }

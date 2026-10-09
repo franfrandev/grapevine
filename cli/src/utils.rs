@@ -12,12 +12,12 @@ pub(crate) trait AsyncService<Ctx, E1: Into<AppError>, E2: Into<AppError>> {
     async fn run(self) -> TaskRet<E2>;
 }
 
-pub(crate) trait Service<Ctx, E1: Into<AppError>, E2: Into<AppError>> {
+pub trait Service<Ctx, E1: Into<AppError>, E2: Into<AppError>> {
     fn new(ctx: Ctx) -> Result<Self, E1>
     where
         Self: Sized;
 
-    async fn run(self) -> TaskRet<E2>;
+    fn run(self) -> impl std::future::Future<Output = TaskRet<E2>> + Send;
 }
 
 pub type TaskRet<E> = Option<Result<Infallible, E>>;
