@@ -1,1 +1,5 @@
-*
+package.json
+web.d.ts
+web.js
+web_bg.wasm
+web_bg.wasm.d.ts
