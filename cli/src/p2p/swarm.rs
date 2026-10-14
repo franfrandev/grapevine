@@ -4,22 +4,23 @@ use crate::{
     p2p::codec::Message,
     utils::{Ctx, Service, TaskRet},
 };
-use libp2p::core::muxing::StreamMuxerBox;
-use libp2p::identity::Keypair;
-use libp2p::multiaddr::Protocol;
-use libp2p::{Multiaddr, Transport};
 use libp2p::{
-    PeerId, Swarm, SwarmBuilder,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, Transport,
+    core::muxing::StreamMuxerBox,
     futures::StreamExt,
     gossipsub::{self, IdentTopic, MessageId},
-    identify, kad,
+    identify,
+    identity::Keypair,
+    kad,
     kad::store::MemoryStore,
-    mdns, ping,
+    mdns,
+    multiaddr::Protocol,
+    ping,
     swarm::{NetworkBehaviour, SwarmEvent},
 };
-use std::convert::Infallible;
-use std::fs;
 use std::net::Ipv4Addr;
+use std::time::Duration;
+use std::{convert::Infallible, fs, net::Ipv6Addr};
 use thiserror::Error;
 use tokio::{
     io,
@@ -55,6 +56,8 @@ pub struct StreamerSwarmService {
 
 pub struct StreamerSwarmCtx {
     pub topic: IdentTopic,
+    pub web_rtc_port: u16,
+    pub quick_port: u16,
     pub gossip_pub_rx: Receiver<Message>,
     pub cancel: CancellationToken,
 }
@@ -66,7 +69,7 @@ impl Service<StreamerSwarmCtx, AppError, Infallible> for StreamerSwarmService {
     where
         Self: Sized,
     {
-        let swarm = init_swarm(&ctx.topic)?;
+        let swarm = init_swarm(&ctx.topic, ctx.web_rtc_port, ctx.quick_port)?;
 
         Ok(StreamerSwarmService {
             swarm,
@@ -108,6 +111,8 @@ pub struct ListenerSwarmService {
 
 pub struct ListenerSwarmCtx {
     pub topic: IdentTopic,
+    pub web_rtc_port: u16,
+    pub quick_port: u16,
     pub gossip_sub_tx: Sender<Message>,
     pub streamer_peer_id: PeerId,
     pub cancel: CancellationToken,
@@ -120,7 +125,7 @@ impl Service<ListenerSwarmCtx, AppError, Infallible> for ListenerSwarmService {
     where
         Self: Sized,
     {
-        let swarm = init_swarm(&ctx.topic)?;
+        let swarm = init_swarm(&ctx.topic, ctx.web_rtc_port, ctx.quick_port)?;
 
         Ok(ListenerSwarmService {
             swarm,
@@ -146,7 +151,11 @@ impl ListenerSwarmService {
     }
 }
 
-fn init_swarm(topic: &IdentTopic) -> Result<Swarm<RadioBehavior>, AppError> {
+fn init_swarm(
+    topic: &IdentTopic,
+    web_rtc_port: u16,
+    quick_port: u16,
+) -> Result<Swarm<RadioBehavior>, AppError> {
     let swarm_builder = if let Ok(mut bytes) = fs::read("secp256k1.der") {
         let keypair = Keypair::secp256k1_from_der(&mut bytes)?;
         SwarmBuilder::with_existing_identity(keypair)
@@ -154,15 +163,23 @@ fn init_swarm(topic: &IdentTopic) -> Result<Swarm<RadioBehavior>, AppError> {
         SwarmBuilder::with_new_identity()
     };
 
+    let web_rtc_certificate = if let Ok(cert) = fs::read_to_string("webrtc.pem") {
+        libp2p_webrtc::tokio::Certificate::from_pem(&cert)?
+    } else {
+        let cert = libp2p_webrtc::tokio::Certificate::generate(&mut rand::rng())?;
+        let cert_str = cert.serialize_pem();
+        fs::write("webrtc.pem", cert_str)?;
+        cert
+    };
+
     let mut swarm = swarm_builder
         .with_tokio()
         .with_quic()
         .with_other_transport(|id_keys| {
-            Ok(libp2p_webrtc::tokio::Transport::new(
-                id_keys.clone(),
-                libp2p_webrtc::tokio::Certificate::generate(&mut rand::rng())?,
+            Ok(
+                libp2p_webrtc::tokio::Transport::new(id_keys.clone(), web_rtc_certificate)
+                    .map(|(peer_id, conn), _| (peer_id, StreamMuxerBox::new(conn))),
             )
-            .map(|(peer_id, conn), _| (peer_id, StreamMuxerBox::new(conn))))
         })
         .unwrap() // TODO
         .with_bandwidth_metrics(&mut global_registry().lock().unwrap())
@@ -175,7 +192,11 @@ fn init_swarm(topic: &IdentTopic) -> Result<Swarm<RadioBehavior>, AppError> {
                 local_public_key,
             ));
 
-            let ping = ping::Behaviour::new(ping::Config::new());
+            // let ping_config = ping::Config::new()
+            //     .with_timeout(Duration::from_secs(5))
+            //     .with_interval(Duration::from_secs(60));
+            let ping_config = ping::Config::default();
+            let ping = ping::Behaviour::new(ping_config);
 
             let gossipsub_config = gossipsub::ConfigBuilder::default()
                 .message_id_fn(message_id)
@@ -202,16 +223,27 @@ fn init_swarm(topic: &IdentTopic) -> Result<Swarm<RadioBehavior>, AppError> {
         })?
         .build();
 
-    let address_webrtc = Multiaddr::from(Ipv4Addr::UNSPECIFIED)
-        .with(Protocol::Udp(0))
-        .with(Protocol::WebRTCDirect);
+    let address_webrtc = {
+        let multiaddr = Multiaddr::from(Ipv6Addr::UNSPECIFIED);
+        // let multiaddr = Multiaddr::from(Ipv4Addr::UNSPECIFIED);
+        multiaddr
+            .with(Protocol::Udp(web_rtc_port))
+            .with(Protocol::WebRTCDirect)
+    };
 
-    swarm.listen_on(address_webrtc.clone()).unwrap();
+    let address_quick = {
+        let multiaddr = Multiaddr::from(Ipv6Addr::UNSPECIFIED);
+        // let multiaddr = Multiaddr::from(Ipv4Addr::UNSPECIFIED);
+        multiaddr
+            .with(Protocol::Udp(quick_port))
+            .with(Protocol::QuicV1)
+    };
 
-    let listener_id = swarm
-        .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap())
-        .map_err(|err| AppError::Other(err.to_string()))?;
-    tracing::debug!("Listening on {:?}", listener_id);
+    for multiaddr in [address_webrtc, address_quick] {
+        tracing::info!("Listening on {:?}", multiaddr);
+        let listener_id = swarm.listen_on(multiaddr)?;
+        tracing::debug!("Listener id: {:?}", listener_id);
+    }
 
     tune_in(&mut swarm, topic)?;
 
@@ -239,7 +271,7 @@ fn publish_data(
     data: Vec<u8>,
 ) -> Result<(), GossipError> {
     let id = swarm.behaviour_mut().gossipsub.publish(topic, data)?;
-    tracing::debug!("Published data on with id {:?}", id);
+    tracing::trace!("Published data on with id {:?}", id);
     Ok(())
 }
 

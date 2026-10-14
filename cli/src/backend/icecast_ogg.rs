@@ -30,6 +30,7 @@ pub struct EmptyStream {}
 
 pub struct StreamWithPipeline {
     pub pipeline: gst::Pipeline,
+    // pub bus_guard: gst::bus::BusWatchGuard,
     pub sink_rx: flume::Receiver<Vec<u8>>,
     pub title_ch: (
         watch::Sender<Option<String>>,
@@ -57,12 +58,21 @@ impl Stream<EmptyStream> {
 
         let pipeline = gst::Pipeline::default();
 
-        let urisourcebin = gst::ElementFactory::make("urisourcebin")
-            .name("urisourcebin")
-            .property("uri", url)
+        let src = gst::ElementFactory::make("uridecodebin3")
+            .name("src")
+            .property("uri", &url)
             .build()?;
-        let parsebin = gst::ElementFactory::make("parsebin")
-            .name("parsebin")
+
+        let queue = gst::ElementFactory::make("queue").name("queue").build()?;
+        let audioconvert = gst::ElementFactory::make("audioconvert")
+            .name("audioconvert")
+            .build()?;
+        let audioresample = gst::ElementFactory::make("audioresample")
+            .name("audioresample")
+            .build()?;
+        let opusenc = gst::ElementFactory::make("opusenc")
+            .name("opusenc")
+            .property("bitrate", 128_000i32)
             .build()?;
         let rtpopuspay = gst::ElementFactory::make("rtpopuspay")
             .name("rtpopuspay")
@@ -70,51 +80,67 @@ impl Stream<EmptyStream> {
             .build()?;
         let appsink = gst_app::AppSink::builder().name("appsink").build();
 
-        pipeline.add_many([&urisourcebin, &parsebin, &rtpopuspay, appsink.upcast_ref()])?;
+        pipeline.add_many([
+            &src,
+            &queue,
+            &audioconvert,
+            &audioresample,
+            &opusenc,
+            &rtpopuspay,
+            appsink.upcast_ref(),
+        ])?;
 
-        gst::Element::link_many([&rtpopuspay, appsink.upcast_ref()])?;
+        // Static chain after decode
+        gst::Element::link_many([
+            &queue,
+            &audioconvert,
+            &audioresample,
+            &opusenc,
+            &rtpopuspay,
+            appsink.upcast_ref(),
+        ])?;
 
-        let parsebin_weak = parsebin.downgrade();
-        urisourcebin.connect_pad_added(move |_, src_pad| {
-            let Some(parsebin) = parsebin_weak.upgrade() else {
+        // Single dynamic link: decoded audio → queue
+        let queue_weak = queue.downgrade();
+        src.connect_pad_added(move |_, src_pad| {
+            let Some(queue) = queue_weak.upgrade() else {
                 return;
             };
-            let sink_pad = parsebin
-                .static_pad("sink")
-                .expect("parsebin has no sink pad");
+            let sink_pad = queue.static_pad("sink").expect("queue sink");
 
-            if !sink_pad.is_linked() {
-                if let Err(err) = src_pad.link(&sink_pad) {
-                    tracing::error!("Failed to link urisourcebin to parsebin: {:?}", err);
+            // if sink_pad.is_linked() {
+            //     return; // already connected
+            // }
+
+            if sink_pad.is_linked() {
+                if let Some(peer) = sink_pad.peer() {
+                    let _ = peer.unlink(&sink_pad);
                 }
             }
-        });
 
-        let rtpopuspay_weak = rtpopuspay.downgrade();
-        parsebin.connect_pad_added(move |bin, src_pad| {
-            let Some(rtpopuspay) = rtpopuspay_weak.upgrade() else {
-                return;
-            };
-            let sink_pad = rtpopuspay
-                .static_pad("sink")
-                .expect("rtpopuspay has no sink pad");
+            // Prefer audio pads only
+            // let caps = src_pad.current_caps().or_else(|| src_pad.query_caps(None));
+            // let is_audio = caps
+            //     .as_ref()
+            //     .and_then(|c| c.structure(0))
+            //     .map(|s| s.name().starts_with("audio/"))
+            //     .unwrap_or(true);
 
-            // Unlink the old pad
-            if sink_pad.is_linked() {
-                if let Some(old_peer) = sink_pad.peer() {
-                    if let Err(err) = old_peer.unlink(&sink_pad) {
-                        tracing::error!("Failed to unlink old pad: {:?}", err);
-                    }
-                }
+            // if !is_audio {
+            //     return;
+            // }
+
+            if let Some(peer) = sink_pad.peer() {
+                tracing::debug!("unlinking old peer {}", peer.name());
+                let _ = peer.unlink(&sink_pad);
             }
 
             if let Err(err) = src_pad.link(&sink_pad) {
-                element_error!(
-                    bin,
-                    gst::ResourceError::Failed,
-                    ("Failed to link parsebin sink to rtpopuspay src: {}", err)
-                );
+                tracing::error!("Failed to link uridecodebin3 → queue: {err}");
+                return;
             }
+
+            let _ = queue.sync_state_with_parent();
         });
 
         let (sink_tx, sink_rx) = flume::bounded(100);
@@ -122,37 +148,9 @@ impl Stream<EmptyStream> {
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                    let buffer = sample.buffer().ok_or_else(|| {
-                        element_error!(
-                            appsink,
-                            gst::ResourceError::Failed,
-                            ("Failed to get buffer")
-                        );
-                        gst::FlowError::Error
-                    })?;
-
-                    let map = buffer.map_readable().map_err(|_| {
-                        element_error!(
-                            appsink,
-                            gst::ResourceError::Failed,
-                            ("Failed to map buffer")
-                        );
-                        gst::FlowError::Error
-                    })?;
-
-                    let samples = map.as_slice_of::<u8>().map_err(|_| {
-                        element_error!(
-                            appsink,
-                            gst::ResourceError::Failed,
-                            ("Failed to cast buffer")
-                        );
-                        gst::FlowError::Error
-                    })?;
-
-                    if sink_tx.send(samples.to_vec()).is_err() {
-                        tracing::debug!("Failed to send samples, channel closed.");
-                    }
-
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                    let _ = sink_tx.send(map.as_slice().to_vec());
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
@@ -160,11 +158,39 @@ impl Stream<EmptyStream> {
 
         let (title_tx, title_rx) = watch::channel(None);
 
+        // let pipeline_weak = pipeline.downgrade();
+        // let title_tx_bus = title_tx.clone();
+        // let bus = pipeline.bus().unwrap();
+        // let bus_guard = bus.add_watch(move |_, msg| {
+        //     use gst::MessageView;
+        //     match dbg!(msg.view()) {
+        //         MessageView::Tag(t) => {
+        //             if let Some(title) = t.tags().get::<gst::tags::Title>() {
+        //                 let _ = title_tx_bus.send(Some(title.get().to_string()));
+        //             }
+        //         }
+        //         MessageView::Eos(_) | MessageView::Error(_) => {
+        //             if let MessageView::Error(e) = msg.view() {
+        //                 tracing::error!("pipeline error: {} ({:?})", e.error(), e.debug());
+        //             } else {
+        //                 tracing::warn!("EOS – restarting");
+        //             }
+        //             if let Some(p) = pipeline_weak.upgrade() {
+        //                 let _ = p.set_state(gst::State::Null);
+        //                 let _ = p.set_state(gst::State::Playing);
+        //             }
+        //         }
+        //         _ => {}
+        //     }
+        //     glib::ControlFlow::Continue
+        // })?;
+
         tracing::debug!("Encoding pipeline created");
 
         Ok(Stream::<StreamWithPipeline> {
             state: StreamWithPipeline {
                 pipeline,
+                // bus_guard,
                 sink_rx,
                 title_ch: (title_tx, title_rx),
             },
@@ -223,7 +249,7 @@ impl Stream<StreamWithPipeline> {
 
         tracing::trace!("Received message: {:?}", msg);
 
-        match msg.view() {
+        match dbg!(msg.view()) {
             MessageView::Eos(..) => return Ok(true),
             MessageView::Error(err) => {
                 tracing::error!("Received error message: {:?}", err);
@@ -250,6 +276,8 @@ impl Stream<StreamWithPipeline> {
             }
             _ => (),
         }
+
+        dbg!(self.state.pipeline.state(None));
 
         Ok(false)
     }

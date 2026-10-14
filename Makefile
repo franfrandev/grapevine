@@ -6,4 +6,5 @@ build_web:
 
 keys:
 	openssl ecparam -name secp256k1 -genkey -noout -out secp256k1.pem; \
-	openssl ec -in secp256k1.pem -pubout -out secp256k1.pub
+	openssl ec -in secp256k1.pem -pubout -out secp256k1.pub; \
+	openssl ec -in secp256k1.pem -outform DER -out secp256k1.der

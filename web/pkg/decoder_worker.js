@@ -10,7 +10,7 @@ async function init_wasm_in_worker() {
     var audioDecoder = AudioDecoder.new();
 
     self.onmessage = async event => {
-        console.log('Received message', event.data);
+        console.debug('Received message', event.data);
         var decoded = audioDecoder.decode_message_ext(event.data);
 
         self.postMessage(decoded);

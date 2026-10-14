@@ -16,12 +16,10 @@ const TARGET_RATE: u32 = 48000;
 const CHANNELS: u32 = 2;
 const FRAME_SIZE: u32 = 960;
 
-pub fn send_rtp_to_decoder(
-    worker: &Worker,
-    packet: Vec<u8>,
-) -> Result<(), JsValue> {
+pub fn send_rtp_to_decoder(worker: &Worker, packet: Vec<u8>) -> Result<(), JsValue> {
     let reader = RtpReader::new(&packet).expect("failed to create RTP reader");
     let payload = reader.payload().to_vec();
+    tracing::info!("Received RTP packet with payload: {:?}", payload);
     // TODO support ogg demuxing. See: https://gist.github.com/amishshah/68548e803c3208566e36e55fe1618e1c
     if payload.is_empty() || payload.starts_with(b"OpusHead") || payload.starts_with(b"OpusTags") {
         return Ok(());
@@ -65,9 +63,9 @@ pub fn play_audio(
             let mut offset = channel as usize;
             for i in 0..FRAME_SIZE as usize {
                 channel_data[i] = pcm[offset];
-                offset = offset + CHANNELS as usize;
+                offset += CHANNELS as usize;
             }
-            audio_buffer.copy_to_channel(&mut channel_data, channel as i32)?;
+            audio_buffer.copy_to_channel(&channel_data, channel as i32)?;
         }
 
         // tracing::debug!("going to play buffer");
@@ -78,7 +76,7 @@ pub fn play_audio(
         *time = (*time).max(ctx.current_time() + LOOK_AHEAD);
         source.start_with_when(*time)?;
         // source.start()?;
-        *time = *time + audio_buffer.duration();
+        *time += audio_buffer.duration();
         // tracing::debug!("next time {time}, current_time: {}", ctx.current_time());
     }
 
@@ -118,8 +116,7 @@ pub async fn start_decoder_worker() -> Result<Worker, JsValue> {
             tx.send(()).unwrap();
         }
     });
-    worker
-        .set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+    worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
     onmessage.forget();
     rx.await.expect("Failed to receive message");
     Ok(worker)
@@ -155,7 +152,7 @@ impl AudioDecoder {
         Ok(pcm_buf.into())
     }
 
-    pub fn decode_packet(&mut self, packet: &[u8]) -> Result<Vec<f32>, JsValue> {
+    fn decode_packet(&mut self, packet: &[u8]) -> Result<Vec<f32>, JsValue> {
         let mut pcm = vec![0.0f32; FRAME_SIZE as usize * CHANNELS as usize];
         let res = self.decoder.decode(packet, FRAME_SIZE as usize, &mut pcm);
         let samples = res.expect("failed to decode Opus packet");

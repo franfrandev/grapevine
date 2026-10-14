@@ -1,30 +1,30 @@
 #![cfg(target_arch = "wasm32")]
 
 use futures::{
-    SinkExt, StreamExt,
+    FutureExt, SinkExt, StreamExt,
     channel::mpsc::{Receiver, Sender},
     select,
 };
 use libp2p::{
-    PeerId,
+    PeerId, Swarm,
     core::Multiaddr,
     gossipsub,
     gossipsub::{Event, IdentTopic, MessageId},
     identify, kad,
     kad::store::MemoryStore,
-    ping,
     swarm::NetworkBehaviour,
     swarm::SwarmEvent,
 };
 use libp2p_webrtc_websys as webrtc_websys;
 use multiaddr::Protocol;
+use serde::Deserialize;
 use std::collections::HashMap;
-use std::{cell::RefCell, io, rc::Rc, str::FromStr, sync::Mutex};
+use std::time::Duration;
+use std::{io, str::FromStr, sync::Mutex};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_common::{send_rtp_to_decoder, start_decoder_worker};
-use web_sys::{Document, HtmlSelectElement, HtmlTextAreaElement, Worker};
-use serde::Deserialize;
+use web_sys::{Document, HtmlSelectElement, HtmlSpanElement, Worker};
 
 mod wasm_common;
 
@@ -44,7 +44,7 @@ pub struct GlobalState {
 #[derive(NetworkBehaviour)]
 pub struct RadioBehavior {
     identify: identify::Behaviour,
-    ping: ping::Behaviour,
+    // ping: ping::Behaviour,
     pub(crate) gossipsub: gossipsub::Behaviour,
     kademlia: kad::Behaviour<MemoryStore>,
 }
@@ -121,7 +121,7 @@ pub async fn run() -> Result<(), JsError> {
                 local_public_key,
             ));
 
-            let ping = ping::Behaviour::new(ping::Config::new());
+            // let ping = ping::Behaviour::new(ping::Config::new());
 
             let gossipsub_config = gossipsub::ConfigBuilder::default()
                 .message_id_fn(message_id)
@@ -138,21 +138,26 @@ pub async fn run() -> Result<(), JsError> {
 
             Ok(RadioBehavior {
                 identify,
-                ping,
+                // ping,
                 gossipsub,
                 kademlia,
             })
         })?
         .build();
 
-    let (mut topic_rx, mut dial_rx) = {
+    struct Channels {
+        topic_rx: Receiver<String>,
+        dial_rx: Receiver<Multiaddr>,
+    }
+
+    let mut channels = {
         let mut maybe_state = STATE.lock().expect("failed to get state");
         let state = maybe_state.as_mut().expect("failed to get state");
 
         let topic_rx = state.topic.rx.take().expect("should be still here");
         let dial_rx = state.dial.rx.take().expect("should be still here");
 
-        (topic_rx, dial_rx)
+        Channels { topic_rx, dial_rx }
     };
 
     // let worker_handle = start_decoder_worker(worker_url)
@@ -160,25 +165,46 @@ pub async fn run() -> Result<(), JsError> {
         .await
         .expect("failed to start worker");
 
+    let mut interval = fluvio_wasm_timer::Interval::new(Duration::from_secs(5));
+
     loop {
         select! {
             event = swarm.select_next_some() => handle_event(&worker, event).await,
-            maybe_topic = topic_rx.next() => {
+            maybe_topic = channels.topic_rx.next() => {
                 let Some(topic) = maybe_topic else {
                     continue;
                 };
                 let topic = IdentTopic::new(topic);
                 swarm.behaviour_mut().gossipsub.subscribe(&topic).expect("failed to subscribe");
             }
-            maybe_dial = dial_rx.next() => {
+            maybe_dial = channels.dial_rx.next() => {
                 let Some(multiaddr) = maybe_dial else {
                     continue;
                 };
                 swarm.dial(multiaddr)?;
             }
+            _ = interval.next().fuse() => {
+                tracing::info!("update network info");
+                if let Err(err) = update_network_info(&swarm) {
+                    tracing::error!("failed to update network info: {:?}", err);
+                }
+            }
         }
     }
 
+    Ok(())
+}
+
+fn update_network_info(swarm: &Swarm<RadioBehavior>) -> Result<(), JsError> {
+    let network_info = swarm.network_info();
+    let peers = network_info.num_peers();
+    let document = current_document()?;
+    document
+        .get_element_by_id("peersCount")
+        .unwrap()
+        .dyn_into::<HtmlSpanElement>()
+        .unwrap()
+        .set_text_content(Some(&peers.to_string()));
     Ok(())
 }
 

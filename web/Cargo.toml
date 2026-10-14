@@ -6,7 +6,7 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib"]
 
-[dependencies]
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 futures = "0.3.34"
 multiaddr = "0.19.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
@@ -23,13 +23,16 @@ futures-channel = "0.3.34"
 wasm-bindgen-futures = "0.4.58"
 toml = "1.1.8+spec-1.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
+futures-timeout = "0.2.1"
+futures-timer = "3.0.3"
+fluvio-wasm-timer = "0.2.5"
 
-[dependencies.libp2p]
+[target.'cfg(target_arch = "wasm32")'.dependencies.libp2p]
 # version = "0.57.0"
 path = "../../rust-libp2p/libp2p"
 features = ["ed25519", "macros", "ping", "identify", "gossipsub", "mdns", "kad", "secp256k1"]
 
-[dependencies.web-sys]
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
 version = "0.3"
 features = [
     "Document",
@@ -46,7 +49,8 @@ features = [
     "HtmlTextAreaElement",
     "Worker",
     "Performance",
-    "HtmlSelectElement"
+    "HtmlSelectElement",
+    "HtmlSpanElement"
 ]
 
 

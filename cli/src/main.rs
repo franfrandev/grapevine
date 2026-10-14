@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let topic = cli.topic.clone().expect("already checked");
     let topic = IdentTopic::new(topic);
-    let node = Node::new(topic, cli.rpc, cli.http, cli.command)?;
+    let node = Node::new(topic, cli.web_rtc_port, cli.quick_port, cli.rpc, cli.http, cli.command)?;
     let node_handle = node.start(cancel.clone());
 
     let cancel2 = cancel.clone();
