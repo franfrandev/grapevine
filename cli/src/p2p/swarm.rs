@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(NetworkBehaviour)]
 pub struct RadioBehavior {
     identify: identify::Behaviour,
-    ping: ping::Behaviour,
+    // ping: ping::Behaviour,
     pub(crate) gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
     kademlia: kad::Behaviour<MemoryStore>,
@@ -195,8 +195,8 @@ fn init_swarm(
             // let ping_config = ping::Config::new()
             //     .with_timeout(Duration::from_secs(5))
             //     .with_interval(Duration::from_secs(60));
-            let ping_config = ping::Config::default();
-            let ping = ping::Behaviour::new(ping_config);
+            // let ping_config = ping::Config::default();
+            // let ping = ping::Behaviour::new(ping_config);
 
             let gossipsub_config = gossipsub::ConfigBuilder::default()
                 .message_id_fn(message_id)
@@ -215,7 +215,7 @@ fn init_swarm(
 
             Ok(RadioBehavior {
                 identify,
-                ping,
+                // ping,
                 gossipsub,
                 mdns,
                 kademlia,

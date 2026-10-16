@@ -30,7 +30,6 @@ pub struct EmptyStream {}
 
 pub struct StreamWithPipeline {
     pub pipeline: gst::Pipeline,
-    // pub bus_guard: gst::bus::BusWatchGuard,
     pub sink_rx: flume::Receiver<Vec<u8>>,
     pub title_ch: (
         watch::Sender<Option<String>>,
@@ -108,27 +107,11 @@ impl Stream<EmptyStream> {
             };
             let sink_pad = queue.static_pad("sink").expect("queue sink");
 
-            // if sink_pad.is_linked() {
-            //     return; // already connected
-            // }
-
             if sink_pad.is_linked() {
                 if let Some(peer) = sink_pad.peer() {
                     let _ = peer.unlink(&sink_pad);
                 }
             }
-
-            // Prefer audio pads only
-            // let caps = src_pad.current_caps().or_else(|| src_pad.query_caps(None));
-            // let is_audio = caps
-            //     .as_ref()
-            //     .and_then(|c| c.structure(0))
-            //     .map(|s| s.name().starts_with("audio/"))
-            //     .unwrap_or(true);
-
-            // if !is_audio {
-            //     return;
-            // }
 
             if let Some(peer) = sink_pad.peer() {
                 tracing::debug!("unlinking old peer {}", peer.name());
@@ -158,39 +141,11 @@ impl Stream<EmptyStream> {
 
         let (title_tx, title_rx) = watch::channel(None);
 
-        // let pipeline_weak = pipeline.downgrade();
-        // let title_tx_bus = title_tx.clone();
-        // let bus = pipeline.bus().unwrap();
-        // let bus_guard = bus.add_watch(move |_, msg| {
-        //     use gst::MessageView;
-        //     match dbg!(msg.view()) {
-        //         MessageView::Tag(t) => {
-        //             if let Some(title) = t.tags().get::<gst::tags::Title>() {
-        //                 let _ = title_tx_bus.send(Some(title.get().to_string()));
-        //             }
-        //         }
-        //         MessageView::Eos(_) | MessageView::Error(_) => {
-        //             if let MessageView::Error(e) = msg.view() {
-        //                 tracing::error!("pipeline error: {} ({:?})", e.error(), e.debug());
-        //             } else {
-        //                 tracing::warn!("EOS – restarting");
-        //             }
-        //             if let Some(p) = pipeline_weak.upgrade() {
-        //                 let _ = p.set_state(gst::State::Null);
-        //                 let _ = p.set_state(gst::State::Playing);
-        //             }
-        //         }
-        //         _ => {}
-        //     }
-        //     glib::ControlFlow::Continue
-        // })?;
-
         tracing::debug!("Encoding pipeline created");
 
         Ok(Stream::<StreamWithPipeline> {
             state: StreamWithPipeline {
                 pipeline,
-                // bus_guard,
                 sink_rx,
                 title_ch: (title_tx, title_rx),
             },
@@ -249,8 +204,13 @@ impl Stream<StreamWithPipeline> {
 
         tracing::trace!("Received message: {:?}", msg);
 
-        match dbg!(msg.view()) {
-            MessageView::Eos(..) => return Ok(true),
+        match msg.view() {
+            MessageView::Eos(..) => {
+                tracing::debug!("Received EOS message, restarting pipeline");
+                self.state.pipeline.set_state(gst::State::Playing)?;
+                // return Ok(true)
+                return Ok(false);
+            }
             MessageView::Error(err) => {
                 tracing::error!("Received error message: {:?}", err);
                 return Err::<_, Error>(
@@ -276,8 +236,6 @@ impl Stream<StreamWithPipeline> {
             }
             _ => (),
         }
-
-        dbg!(self.state.pipeline.state(None));
 
         Ok(false)
     }
