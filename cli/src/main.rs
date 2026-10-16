@@ -1,6 +1,8 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use clap::Parser;
+use grapevine::{AppError, Node, cli};
 use libp2p::gossipsub::IdentTopic;
-use p2pradio::{AppError, Node, cli};
 use std::error::Error;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
@@ -11,6 +13,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
 
     let cli = cli::Cli::parse();
     if cli.topic.is_none() {
@@ -24,7 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let topic = cli.topic.clone().expect("already checked");
     let topic = IdentTopic::new(topic);
-    let node = Node::new(topic, cli.rpc, cli.http, cli.command)?;
+    let node = Node::new(topic, cli.web_rtc_port, cli.quick_port, cli.rpc, cli.http, cli.command)?;
     let node_handle = node.start(cancel.clone());
 
     let cancel2 = cancel.clone();

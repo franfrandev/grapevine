@@ -42,9 +42,9 @@ pub struct EncodingBackend {
 }
 
 pub struct EncodingBackendCtx {
-    pub(crate) gossip_tx: mpsc::Sender<Message>,
-    pub(crate) url: String,
-    pub(crate) cancel: CancellationToken,
+    pub gossip_tx: mpsc::Sender<Message>,
+    pub url: String,
+    pub cancel: CancellationToken,
 }
 
 impl Service<EncodingBackendCtx, AppError, AppError> for EncodingBackend {

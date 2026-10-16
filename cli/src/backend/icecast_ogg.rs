@@ -57,12 +57,21 @@ impl Stream<EmptyStream> {
 
         let pipeline = gst::Pipeline::default();
 
-        let urisourcebin = gst::ElementFactory::make("urisourcebin")
-            .name("urisourcebin")
-            .property("uri", url)
+        let src = gst::ElementFactory::make("uridecodebin3")
+            .name("src")
+            .property("uri", &url)
             .build()?;
-        let parsebin = gst::ElementFactory::make("parsebin")
-            .name("parsebin")
+
+        let queue = gst::ElementFactory::make("queue").name("queue").build()?;
+        let audioconvert = gst::ElementFactory::make("audioconvert")
+            .name("audioconvert")
+            .build()?;
+        let audioresample = gst::ElementFactory::make("audioresample")
+            .name("audioresample")
+            .build()?;
+        let opusenc = gst::ElementFactory::make("opusenc")
+            .name("opusenc")
+            .property("bitrate", 128_000i32)
             .build()?;
         let rtpopuspay = gst::ElementFactory::make("rtpopuspay")
             .name("rtpopuspay")
@@ -70,51 +79,51 @@ impl Stream<EmptyStream> {
             .build()?;
         let appsink = gst_app::AppSink::builder().name("appsink").build();
 
-        pipeline.add_many([&urisourcebin, &parsebin, &rtpopuspay, appsink.upcast_ref()])?;
+        pipeline.add_many([
+            &src,
+            &queue,
+            &audioconvert,
+            &audioresample,
+            &opusenc,
+            &rtpopuspay,
+            appsink.upcast_ref(),
+        ])?;
 
-        gst::Element::link_many([&rtpopuspay, appsink.upcast_ref()])?;
+        // Static chain after decode
+        gst::Element::link_many([
+            &queue,
+            &audioconvert,
+            &audioresample,
+            &opusenc,
+            &rtpopuspay,
+            appsink.upcast_ref(),
+        ])?;
 
-        let parsebin_weak = parsebin.downgrade();
-        urisourcebin.connect_pad_added(move |_, src_pad| {
-            let Some(parsebin) = parsebin_weak.upgrade() else {
+        // Single dynamic link: decoded audio → queue
+        let queue_weak = queue.downgrade();
+        src.connect_pad_added(move |_, src_pad| {
+            let Some(queue) = queue_weak.upgrade() else {
                 return;
             };
-            let sink_pad = parsebin
-                .static_pad("sink")
-                .expect("parsebin has no sink pad");
+            let sink_pad = queue.static_pad("sink").expect("queue sink");
 
-            if !sink_pad.is_linked() {
-                if let Err(err) = src_pad.link(&sink_pad) {
-                    tracing::error!("Failed to link urisourcebin to parsebin: {:?}", err);
+            if sink_pad.is_linked() {
+                if let Some(peer) = sink_pad.peer() {
+                    let _ = peer.unlink(&sink_pad);
                 }
             }
-        });
 
-        let rtpopuspay_weak = rtpopuspay.downgrade();
-        parsebin.connect_pad_added(move |bin, src_pad| {
-            let Some(rtpopuspay) = rtpopuspay_weak.upgrade() else {
-                return;
-            };
-            let sink_pad = rtpopuspay
-                .static_pad("sink")
-                .expect("rtpopuspay has no sink pad");
-
-            // Unlink the old pad
-            if sink_pad.is_linked() {
-                if let Some(old_peer) = sink_pad.peer() {
-                    if let Err(err) = old_peer.unlink(&sink_pad) {
-                        tracing::error!("Failed to unlink old pad: {:?}", err);
-                    }
-                }
+            if let Some(peer) = sink_pad.peer() {
+                tracing::debug!("unlinking old peer {}", peer.name());
+                let _ = peer.unlink(&sink_pad);
             }
 
             if let Err(err) = src_pad.link(&sink_pad) {
-                element_error!(
-                    bin,
-                    gst::ResourceError::Failed,
-                    ("Failed to link parsebin sink to rtpopuspay src: {}", err)
-                );
+                tracing::error!("Failed to link uridecodebin3 → queue: {err}");
+                return;
             }
+
+            let _ = queue.sync_state_with_parent();
         });
 
         let (sink_tx, sink_rx) = flume::bounded(100);
@@ -122,37 +131,9 @@ impl Stream<EmptyStream> {
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                    let buffer = sample.buffer().ok_or_else(|| {
-                        element_error!(
-                            appsink,
-                            gst::ResourceError::Failed,
-                            ("Failed to get buffer")
-                        );
-                        gst::FlowError::Error
-                    })?;
-
-                    let map = buffer.map_readable().map_err(|_| {
-                        element_error!(
-                            appsink,
-                            gst::ResourceError::Failed,
-                            ("Failed to map buffer")
-                        );
-                        gst::FlowError::Error
-                    })?;
-
-                    let samples = map.as_slice_of::<u8>().map_err(|_| {
-                        element_error!(
-                            appsink,
-                            gst::ResourceError::Failed,
-                            ("Failed to cast buffer")
-                        );
-                        gst::FlowError::Error
-                    })?;
-
-                    if sink_tx.send(samples.to_vec()).is_err() {
-                        tracing::debug!("Failed to send samples, channel closed.");
-                    }
-
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                    let _ = sink_tx.send(map.as_slice().to_vec());
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
@@ -224,7 +205,12 @@ impl Stream<StreamWithPipeline> {
         tracing::trace!("Received message: {:?}", msg);
 
         match msg.view() {
-            MessageView::Eos(..) => return Ok(true),
+            MessageView::Eos(..) => {
+                tracing::debug!("Received EOS message, restarting pipeline");
+                self.state.pipeline.set_state(gst::State::Playing)?;
+                // return Ok(true)
+                return Ok(false);
+            }
             MessageView::Error(err) => {
                 tracing::error!("Received error message: {:?}", err);
                 return Err::<_, Error>(

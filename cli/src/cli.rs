@@ -8,17 +8,25 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Variant,
 
-    /// HTTP socket of the JSON-RPC server
+    /// HTTP socket of the JSON-RPC server.
     #[arg(long, global = true, default_value = "0.0.0.0:7890", value_parser = socketaddr_value_parser)]
     pub rpc: SocketAddr,
 
-    /// HTTP socket of the HTTP server
+    /// HTTP socket of the HTTP server.
     #[arg(long, global = true, default_value = "0.0.0.0:10909", value_parser = socketaddr_value_parser)]
     pub http: SocketAddr,
 
     // this is a limitation of clap: https://github.com/clap-rs/clap/issues/1546
     #[arg(short, long, global = true)]
     pub topic: Option<String>,
+
+    /// Port for the WebRTC endpoint. Passing 0 will auto-assign a port.
+    #[arg(short, long, global = true, default_value = "0")]
+    pub web_rtc_port: u16,
+
+    /// Port for the Quick UDP Internet Connection endpoint. Passing 0 will auto-assign a port.
+    #[arg(short, long, global = true, default_value = "0")]
+    pub quick_port: u16,
 }
 
 #[derive(Debug, Subcommand)]
