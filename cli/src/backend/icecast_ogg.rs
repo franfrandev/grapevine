@@ -226,12 +226,10 @@ impl Stream<StreamWithPipeline> {
                 );
             }
             MessageView::Tag(tag) => {
-                if let Some(title) = tag.tags().get::<gst::tags::Title>() {
-                    tracing::debug!("Received title tag: {:?}", title);
+                if let Some(data) = convert_tag_to_metadata(tag.tags()) {
+                    tracing::debug!("Received title tag: {:?}", data);
                     let title_tx = &self.state.title_ch.0;
-                    title_tx
-                        .send(Some(title.get().to_string()))
-                        .expect("rx is held");
+                    title_tx.send(Some(data)).expect("rx is held");
                 }
             }
             _ => (),
@@ -247,4 +245,15 @@ impl Stream<StreamWithPipeline> {
     pub fn title_rx(&self) -> watch::Receiver<Option<String>> {
         self.state.title_ch.1.clone()
     }
+}
+
+fn convert_tag_to_metadata(tags: gst::TagList) -> Option<String> {
+    let maybe_title = tags.get::<gst::tags::Title>().map(|v| v.get().to_string());
+    let maybe_artist = tags.get::<gst::tags::Artist>().map(|v| v.get().to_string());
+
+    maybe_title.map(|title| {
+        maybe_artist
+            .map(|artist| format!("{} - {}", title, artist))
+            .unwrap_or(title)
+    })
 }
