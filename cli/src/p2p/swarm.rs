@@ -21,7 +21,6 @@ use libp2p::{
     request_response::{self, Codec},
     swarm::{NetworkBehaviour, SwarmEvent},
 };
-use libp2p_stream as stream;
 use std::{convert::Infallible, fs, net::Ipv6Addr};
 use thiserror::Error;
 use tokio::{
@@ -66,19 +65,7 @@ pub struct StreamerSwarmCtx {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct BytesCodec {
-    max_request_size: u64,
-    max_response_size: u64,
-}
-
-impl BytesCodec {
-    pub fn new(max_request_size: u64, max_response_size: u64) -> Self {
-        Self {
-            max_request_size,
-            max_response_size,
-        }
-    }
-}
+pub struct BytesCodec;
 
 impl Codec for BytesCodec {
     type Protocol = StreamProtocol;
@@ -89,7 +76,7 @@ impl Codec for BytesCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+        Err(io::Error::other("not implemented"))
     }
 
     async fn read_response<T>(
@@ -100,7 +87,7 @@ impl Codec for BytesCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+        Err(io::Error::other("not implemented"))
     }
 
     async fn write_request<T>(
@@ -125,7 +112,7 @@ impl Codec for BytesCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+        Err(io::Error::other("not implemented"))
     }
 }
 

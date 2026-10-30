@@ -1,10 +1,8 @@
 // Parse the source Ogg/Opus stream and emit one RTP packet per transport message.
 
 use anyhow::Error;
-use byte_slice_cast::AsSliceOf;
 use derive_more::{Display, Error};
 use gstreamer as gst;
-use gstreamer::element_error;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use std::sync::{Arc, Mutex};
@@ -107,10 +105,10 @@ impl Stream<EmptyStream> {
             };
             let sink_pad = queue.static_pad("sink").expect("queue sink");
 
-            if sink_pad.is_linked() {
-                if let Some(peer) = sink_pad.peer() {
-                    let _ = peer.unlink(&sink_pad);
-                }
+            if sink_pad.is_linked()
+                && let Some(peer) = sink_pad.peer()
+            {
+                let _ = peer.unlink(&sink_pad);
             }
 
             if let Some(peer) = sink_pad.peer() {
