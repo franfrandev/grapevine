@@ -5622,6 +5622,7 @@ dependencies = [
  "js-sys",
  "opus-rs",
  "tracing",
+ "wasm-bindgen",
 ]
 
 [[package]]

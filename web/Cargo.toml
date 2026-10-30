@@ -11,5 +11,5 @@ tracing = "0.1.44"
 js-sys = "0.3.85"
 opus-rs = "0.1.34"
 console_error_panic_hook = "0.1.7"
-
+wasm-bindgen = "0.2.108"
 
