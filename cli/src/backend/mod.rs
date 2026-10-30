@@ -160,11 +160,7 @@ impl AsyncService<DecodingBackendCtx, anyhow::Error, anyhow::Error> for Decoding
         let cancel = self.cancel.clone();
         self.cancel
             .run_until_cancelled(async {
-                let res = self
-                    .dec_stream_with_pipeline
-                    .run_dec_stream(cancel)
-                    .await
-                    .map_err(Into::into);
+                let res = self.dec_stream_with_pipeline.run_dec_stream(cancel).await;
                 let res = match res {
                     Ok(()) => anyhow!("Pipeline finished unexpectedly"),
                     Err(e) => e,

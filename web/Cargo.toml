@@ -7,50 +7,9 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-futures = "0.3.34"
-multiaddr = "0.19.1"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing = "0.1.44"
-wasm-tracing = "2.1.0"
 js-sys = "0.3.85"
-libp2p-webrtc-websys = { path = "../../rust-libp2p/transports/webrtc-websys" }
-wasm-bindgen = "0.2"
 opus-rs = "0.1.34"
-thiserror = "2.0.21"
-rtp-rs = "0.6.0"
 console_error_panic_hook = "0.1.7"
-futures-channel = "0.3.34"
-wasm-bindgen-futures = "0.4.58"
-toml = "1.1.8+spec-1.1.0"
-serde = { version = "1.0.229", features = ["derive"] }
-futures-timeout = "0.2.1"
-futures-timer = "3.0.3"
-fluvio-wasm-timer = "0.2.5"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies.libp2p]
-# version = "0.57.0"
-path = "../../rust-libp2p/libp2p"
-features = ["ed25519", "macros", "ping", "identify", "gossipsub", "mdns", "kad", "secp256k1"]
-
-[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
-version = "0.3"
-features = [
-    "Document",
-    "Element",
-    "HtmlElement",
-    "Node",
-    "Response",
-    "Window",
-    "AudioContext",
-    "AudioBuffer",
-    "AudioBufferSourceNode",
-    "AudioDestinationNode",
-    "Storage",
-    "HtmlTextAreaElement",
-    "Worker",
-    "Performance",
-    "HtmlSelectElement",
-    "HtmlSpanElement"
-]
 
 

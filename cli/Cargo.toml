@@ -31,13 +31,10 @@ lazy_static = "1.5.0"
 eyre = "0.6.14"
 rand = "0.10.3"
 rustls = "0.23.45"
-unsigned-varint = "0.8.0"
-async-trait = "0.1.92"
 # console-subscriber = "0.5.0"
 
 [dependencies.libp2p]
-path = "../../rust-libp2p/libp2p"
-#version = "0.57.0"
+version = "0.57.0"
 features = [
     "macros",
     "mdns",
@@ -56,9 +53,5 @@ features = [
 ]
 
 [dependencies.libp2p-webrtc]
-#version = "0.10.0-alpha"
-path = "../../rust-libp2p/transports/webrtc"
+version = "0.10.0-alpha"
 features = ["tokio", "pem"]
-
-[dependencies.libp2p-stream]
-path = "../../rust-libp2p/protocols/stream"
