@@ -25,6 +25,8 @@ pub struct StreamerNodeCtx {
     url: String,
     rpc_addr: SocketAddr,
     http_addr: SocketAddr,
+    web_rtc_port: u16,
+    quick_port: u16,
     cancel: CancellationToken,
 }
 
@@ -36,6 +38,8 @@ impl AsyncService<StreamerNodeCtx, AppError, AppError> for StreamerNode {
         let (gossip_pub_tx, gossip_pub_rx) = mpsc::channel(100);
         let swarm_service = StreamerSwarmService::new(StreamerSwarmCtx {
             topic: ctx.topic,
+            web_rtc_port: ctx.web_rtc_port,
+            quick_port: ctx.quick_port,
             gossip_pub_rx,
             cancel: ctx.cancel.clone(),
         })?;
@@ -81,9 +85,11 @@ pub struct ListenerNode {
 
 pub struct ListenerNodeCtx {
     topic: IdentTopic,
+    web_rtc_port: u16,
     rpc_addr: SocketAddr,
     listener_addr: SocketAddr,
     streamer_peer_id: PeerId,
+    quick_port: u16,
     cancel: CancellationToken,
 }
 
@@ -95,6 +101,8 @@ impl AsyncService<ListenerNodeCtx, AppError, AppError> for ListenerNode {
         let (gossip_sub_tx, gossip_sub_rx) = mpsc::channel(100);
         let swarm_service = ListenerSwarmService::new(ListenerSwarmCtx {
             topic: ctx.topic,
+            web_rtc_port: ctx.web_rtc_port,
+            quick_port: ctx.quick_port,
             gossip_sub_tx,
             streamer_peer_id: ctx.streamer_peer_id,
             cancel: ctx.cancel.clone(),
@@ -128,6 +136,8 @@ impl AsyncService<ListenerNodeCtx, AppError, AppError> for ListenerNode {
 
 pub struct Node {
     topic: IdentTopic,
+    web_rtc_port: u16,
+    quick_port: u16,
     rpc_addr: SocketAddr,
     http_addr: SocketAddr,
     variant: Variant,
@@ -136,12 +146,16 @@ pub struct Node {
 impl Node {
     pub fn new(
         topic: IdentTopic,
+        web_rtc_port: u16,
+        quick_port: u16,
         rpc_addr: SocketAddr,
         http_addr: SocketAddr,
         variant: Variant,
     ) -> Result<Self, AppError> {
         Ok(Node {
             topic,
+            web_rtc_port,
+            quick_port,
             rpc_addr,
             http_addr,
             variant,
@@ -153,6 +167,8 @@ impl Node {
             Variant::Streamer(Streamer { url }) => {
                 let ctx = StreamerNodeCtx {
                     topic: self.topic,
+                    web_rtc_port: self.web_rtc_port,
+                    quick_port: self.quick_port,
                     url,
                     rpc_addr: self.rpc_addr,
                     http_addr: self.http_addr,
@@ -168,6 +184,8 @@ impl Node {
             Variant::Listener(Listener { streamer_peer_id }) => {
                 let ctx = ListenerNodeCtx {
                     topic: self.topic,
+                    web_rtc_port: self.web_rtc_port,
+                    quick_port: self.quick_port,
                     rpc_addr: self.rpc_addr,
                     listener_addr: self.http_addr,
                     streamer_peer_id,

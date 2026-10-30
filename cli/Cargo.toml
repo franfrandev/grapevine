@@ -1,0 +1,64 @@
+[package]
+name = "grapevine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.53.1", features = ["full"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tokio-util = "0.7.19"
+tracing = "0.1.44"
+clap = { version = "4.6.1", features = ["derive"] }
+jsonrpsee = { version = "0.26.0", features = ["full"] }
+thiserror = "2.0.20"
+gstreamer = "0.25.3"
+gstreamer-app = "0.25.2"
+anyhow = "1.0.104"
+hyper = "1.11.1"
+bytes = "1.12.1"
+http-body-util = "0.1.5"
+futures-util = "0.3.34"
+tokio-stream = "0.1.19"
+flume = "0.12.0"
+byte-slice-cast = "1.2.3"
+derive_more = { version = "2.1.1", features = ["full"] }
+glib = "0.22.9"
+tracing-gstreamer = "0.9.0"
+futures = "0.3.34"
+axum = "0.8.9"
+prometheus-client = "0.25.1"
+lazy_static = "1.5.0"
+eyre = "0.6.14"
+rand = "0.10.3"
+rustls = "0.23.45"
+unsigned-varint = "0.8.0"
+async-trait = "0.1.92"
+# console-subscriber = "0.5.0"
+
+[dependencies.libp2p]
+path = "../../rust-libp2p/libp2p"
+#version = "0.57.0"
+features = [
+    "macros",
+    "mdns",
+    "gossipsub",
+    "yamux",
+    "quic",
+    "tokio",
+    "tcp",
+    "noise",
+    "kad",
+    "identify",
+    "ping",
+    "metrics",
+    "secp256k1",
+    "request-response"
+]
+
+[dependencies.libp2p-webrtc]
+#version = "0.10.0-alpha"
+path = "../../rust-libp2p/transports/webrtc"
+features = ["tokio", "pem"]
+
+[dependencies.libp2p-stream]
+path = "../../rust-libp2p/protocols/stream"

@@ -1,13 +1,9 @@
-use libp2p::BehaviourBuilderError;
-use libp2p::gossipsub::PublishError;
 use std::convert::Infallible;
 use thiserror::Error;
-use tokio::io;
-use tokio::task::JoinError;
+use tokio::{io, task::JoinError};
 
 pub mod cli;
 pub mod node;
-use crate::p2p::swarm::GossipError;
 pub use node::Node;
 
 pub mod backend;
@@ -37,9 +33,9 @@ pub enum AppError {
     #[error("rpc error: {0}")]
     Rpc(#[from] rpc::RpcError),
     #[error(transparent)]
-    PublishError(#[from] PublishError),
+    PublishError(#[from] libp2p::gossipsub::PublishError),
     #[error(transparent)]
-    GossipError(#[from] GossipError),
+    GossipError(#[from] p2p::swarm::GossipError),
     #[error("task stopped: {0}, reason: {1:?}")]
     TaskErr(String, TaskError),
     #[error("task panicked: {0}")]
@@ -47,9 +43,15 @@ pub enum AppError {
     #[error("task exited")]
     TaskExited,
     #[error("behaviour builder error: {0}")]
-    BehaviourBuilder(#[from] BehaviourBuilderError),
+    BehaviourBuilder(#[from] libp2p::BehaviourBuilderError),
     #[error("error: {0}")]
     Anyhow(#[from] anyhow::Error),
+    #[error(transparent)]
+    DecodingError(#[from] libp2p::identity::DecodingError),
+    #[error(transparent)]
+    CertError(#[from] libp2p_webrtc::tokio::certificate::Error),
+    #[error(transparent)]
+    TransportError(#[from] libp2p::TransportError<io::Error>),
 
     #[error("unreachable")] // this is to accommodate long-running services
     Unreachable(#[from] Infallible),
