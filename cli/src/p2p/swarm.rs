@@ -4,8 +4,11 @@ use crate::{
     p2p::codec::Message,
     utils::{Ctx, Service, TaskRet},
 };
+use futures::prelude::*;
+use libp2p::core::ConnectedPoint;
+use libp2p::request_response::ProtocolSupport;
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, Transport,
+    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder, Transport,
     core::muxing::StreamMuxerBox,
     futures::StreamExt,
     gossipsub::{self, IdentTopic, MessageId},
@@ -15,11 +18,10 @@ use libp2p::{
     kad::store::MemoryStore,
     mdns,
     multiaddr::Protocol,
-    ping,
+    request_response::{self, Codec},
     swarm::{NetworkBehaviour, SwarmEvent},
 };
-use std::net::Ipv4Addr;
-use std::time::Duration;
+use libp2p_stream as stream;
 use std::{convert::Infallible, fs, net::Ipv6Addr};
 use thiserror::Error;
 use tokio::{
@@ -31,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(NetworkBehaviour)]
 pub struct RadioBehavior {
     identify: identify::Behaviour,
-    // ping: ping::Behaviour,
+    hello: request_response::Behaviour<BytesCodec>,
     pub(crate) gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
     kademlia: kad::Behaviour<MemoryStore>,
@@ -51,6 +53,7 @@ pub struct StreamerSwarmService {
     swarm: Swarm<RadioBehavior>,
     topic: IdentTopic,
     gossip_pub_rx: Receiver<Message>,
+    last_metadata: Option<Vec<u8>>,
     cancel: CancellationToken,
 }
 
@@ -60,6 +63,70 @@ pub struct StreamerSwarmCtx {
     pub quick_port: u16,
     pub gossip_pub_rx: Receiver<Message>,
     pub cancel: CancellationToken,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BytesCodec {
+    max_request_size: u64,
+    max_response_size: u64,
+}
+
+impl BytesCodec {
+    pub fn new(max_request_size: u64, max_response_size: u64) -> Self {
+        Self {
+            max_request_size,
+            max_response_size,
+        }
+    }
+}
+
+impl Codec for BytesCodec {
+    type Protocol = StreamProtocol;
+    type Request = Vec<u8>;
+    type Response = Vec<u8>;
+
+    async fn read_request<T>(&mut self, _: &Self::Protocol, _: &mut T) -> io::Result<Self::Request>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
+
+    async fn read_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        _: &mut T,
+    ) -> io::Result<Self::Response>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
+
+    async fn write_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        io.write_all(&req).await?;
+        Ok(())
+    }
+
+    async fn write_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        _: &mut T,
+        _: Self::Response,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
 }
 
 impl Ctx for StreamerSwarmCtx {}
@@ -75,6 +142,7 @@ impl Service<StreamerSwarmCtx, AppError, Infallible> for StreamerSwarmService {
             swarm,
             topic: ctx.topic,
             gossip_pub_rx: ctx.gossip_pub_rx,
+            last_metadata: None,
             cancel: ctx.cancel,
         })
     }
@@ -83,13 +151,17 @@ impl Service<StreamerSwarmCtx, AppError, Infallible> for StreamerSwarmService {
         loop {
             tokio::select! {
                 Some(msg) = self.gossip_pub_rx.recv() => {
+                    let is_metadata = matches!(msg, Message::Metadata(_));
                     let data = msg.encode();
+                    if is_metadata {
+                        self.last_metadata = Some(data.clone());
+                    }
                     tracing::trace!("received data to publish: {} bytes", data.len());
                     if let Err(err) = publish_data(&mut self.swarm, self.topic.clone(), data) {
                         tracing::trace!("Failed to publish data: {err}");
                     }
                 },
-                event = self.swarm.select_next_some() => process_streamer_event(&mut self.swarm, event).await,
+                event = self.swarm.select_next_some() => process_streamer_event(&mut self.swarm, &self.last_metadata, event).await,
                 _ = self.cancel.cancelled() => break None,
             }
         }
@@ -192,11 +264,10 @@ fn init_swarm(
                 local_public_key,
             ));
 
-            // let ping_config = ping::Config::new()
-            //     .with_timeout(Duration::from_secs(5))
-            //     .with_interval(Duration::from_secs(60));
-            // let ping_config = ping::Config::default();
-            // let ping = ping::Behaviour::new(ping_config);
+            let hello = request_response::Behaviour::new(
+                [(HELLO_PROTOCOL, ProtocolSupport::Outbound)],
+                request_response::Config::default(),
+            );
 
             let gossipsub_config = gossipsub::ConfigBuilder::default()
                 .message_id_fn(message_id)
@@ -215,7 +286,7 @@ fn init_swarm(
 
             Ok(RadioBehavior {
                 identify,
-                // ping,
+                hello,
                 gossipsub,
                 mdns,
                 kademlia,
@@ -275,8 +346,11 @@ fn publish_data(
     Ok(())
 }
 
+const HELLO_PROTOCOL: StreamProtocol = StreamProtocol::new("/grapevine/hello/1.0.0");
+
 async fn process_streamer_event(
     swarm: &mut Swarm<RadioBehavior>,
+    last_metadata: &Option<Vec<u8>>,
     event: SwarmEvent<RadioBehaviorEvent>,
 ) {
     tracing::trace!("Swarm Event: {:?}", event);
@@ -284,6 +358,17 @@ async fn process_streamer_event(
         SwarmEvent::Behaviour(b_event) => process_streamer_behavior_event(swarm, b_event).await,
         SwarmEvent::IncomingConnection { .. } => {}
         SwarmEvent::NewListenAddr { address, .. } => tracing::info!("Listening on {:?}", address),
+        SwarmEvent::ConnectionEstablished {
+            endpoint, peer_id, ..
+        } => {
+            let Some(metadata) = last_metadata.clone() else {
+                tracing::warn!("No metadata to send to peer");
+                return;
+            };
+            if matches!(endpoint, ConnectedPoint::Listener { .. }) {
+                swarm.behaviour_mut().hello.send_request(&peer_id, metadata);
+            }
+        }
         _other => {
             tracing::debug!("Swarm Event not handled: {:?}", _other)
         }
