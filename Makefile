@@ -2,7 +2,7 @@ build_app:
 	cargo build -p grapevine
 
 build_web:
-	wasm-pack build web --target no-modules
+	wasm-pack build web --target web
 
 keys:
 	openssl ecparam -name secp256k1 -genkey -noout -out secp256k1.pem; \
